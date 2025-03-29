@@ -11,6 +11,13 @@ let exitPortalGroup, exitPortalBox; // For the exit portal
 let currentSpeed = Config.DEFAULT_SPEED; // Example speed, update this based on your game
 let selfUsername = Config.DEFAULT_USERNAME; // Example username
 let playerColor = Config.DEFAULT_COLOR; // Example color
+const clock = new THREE.Clock(); // Clock for delta time
+
+// Movement state
+const keysPressed = {
+    w: false, a: false, s: false, d: false,
+    arrowup: false, arrowleft: false, arrowdown: false, arrowright: false
+};
 
 const urlParams = new URLSearchParams(window.location.search);
 const cameFromPortal = urlParams.get('portal') === 'true';
@@ -56,31 +63,33 @@ function init() {
     ground.receiveShadow = true;
     scene.add(ground);
 
-    // OrbitControls for debugging/navigation if needed
-    // controls = new OrbitControls(camera, renderer.domElement);
-    // controls.target.set(Config.SPAWN_POINT_X, Config.SPAWN_POINT_Y, Config.SPAWN_POINT_Z);
-    // controls.update();
-
     // --- Player Setup (Example: Simple Cube) ---
-    // Replace this with your actual player object setup
     const playerGeometry = new THREE.BoxGeometry(1, 2, 1); // Example dimensions
     const playerMaterial = new THREE.MeshStandardMaterial({ color: playerColor }); // Use color from params
     player = new THREE.Mesh(playerGeometry, playerMaterial);
-    player.position.set(Config.SPAWN_POINT_X, Config.SPAWN_POINT_Y + 1, Config.SPAWN_POINT_Z); // Position slightly above ground
+    player.position.set(Config.SPAWN_POINT_X, Config.SPAWN_POINT_Y + 1, Config.SPAWN_POINT_Z); // Position slightly above ground (Y=height/2 + ground offset)
     player.castShadow = true;
     scene.add(player);
     // Initialize player bounding box
     playerBox = new THREE.Box3().setFromObject(player);
     // --- End Player Setup ---
 
+    // Camera initial look at player
+    camera.lookAt(player.position);
 
     // --- Portal Creation ---
     if (cameFromPortal && refUrlParam) {
         // Create an entry portal if the user arrived via a portal
         entryPortalRefUrl = refUrlParam; // Store the return URL
         const portalLabel = `Return to ${getDomainFromUrl(entryPortalRefUrl)}`;
+        // Position entry portal slightly behind spawn point
+        const entryPortalPosition = new THREE.Vector3(
+            Config.SPAWN_POINT_X,
+            Config.SPAWN_POINT_Y + Config.PORTAL_RADIUS,
+            Config.SPAWN_POINT_Z - Config.PORTAL_RADIUS * 1.5 // Behind player start
+        );
         entryPortalGroup = createPortal(
-            new THREE.Vector3(Config.SPAWN_POINT_X, Config.SPAWN_POINT_Y + Config.PORTAL_RADIUS, Config.SPAWN_POINT_Z), // Position centered at spawn
+            entryPortalPosition,
             Config.ENTRY_PORTAL_COLOR,
             portalLabel,
             0.35, // Initial rotation X
@@ -106,6 +115,10 @@ function init() {
     console.log("Exit portal created, leading to:", Config.EXIT_PORTAL_URL);
     // --- End Portal Creation ---
 
+    // --- Event Listeners for Movement ---
+    window.addEventListener('keydown', handleKeyDown, false);
+    window.addEventListener('keyup', handleKeyUp, false);
+    // --- End Event Listeners ---
 
     // Handle window resize
     window.addEventListener('resize', onWindowResize, false);
@@ -113,6 +126,22 @@ function init() {
     // Start animation loop
     animate();
 }
+
+// --- Event Handlers ---
+function handleKeyDown(event) {
+    const key = event.key.toLowerCase();
+    if (key in keysPressed) {
+        keysPressed[key] = true;
+    }
+}
+
+function handleKeyUp(event) {
+    const key = event.key.toLowerCase();
+    if (key in keysPressed) {
+        keysPressed[key] = false;
+    }
+}
+// --- End Event Handlers ---
 
 /**
  * Helper to extract domain from URL for display.
@@ -185,23 +214,48 @@ let enteredEntryPortal = false; // Flag for entry portal
 function animate() {
     requestAnimationFrame(animate);
 
-    const delta = 0.016; // Assume ~60fps, replace with proper clock delta if available
+    const delta = clock.getDelta(); // Get time since last frame
 
-    // --- Player Movement/Update Example ---
-    // Replace with your game's player update logic
-    // Example: Simple forward movement
-    // player.translateZ(-currentSpeed * delta);
-    // Update camera to follow player
-    // camera.position.x = player.position.x;
-    // camera.position.z = player.position.z + 20;
-    // camera.position.y = player.position.y + 10;
-    // camera.lookAt(player.position);
-    // controls.target.copy(player.position); // Update controls target if using OrbitControls
-    // controls.update();
-
-    // Update player bounding box
+    // --- Player Movement Update ---
     if (player) {
+        const moveDirection = new THREE.Vector3();
+        if (keysPressed.w || keysPressed.arrowup) moveDirection.z -= 1;
+        if (keysPressed.s || keysPressed.arrowdown) moveDirection.z += 1;
+        if (keysPressed.a || keysPressed.arrowleft) moveDirection.x -= 1;
+        if (keysPressed.d || keysPressed.arrowright) moveDirection.x += 1;
+
+        // Normalize diagonal movement
+        if (moveDirection.length() > 0) {
+             moveDirection.normalize();
+        }
+
+        // Apply movement
+        player.position.x += moveDirection.x * currentSpeed * delta;
+        player.position.z += moveDirection.z * currentSpeed * delta;
+
+        // Basic ground clamp (adjust based on player origin point)
+        // Assuming player origin is at its base
+        // if (player.position.y < Config.SPAWN_POINT_Y) {
+        //     player.position.y = Config.SPAWN_POINT_Y;
+        // }
+        // If player origin is center, adjust y based on geometry height
+        const playerHeight = player.geometry.parameters.height || 2; // Get height or default
+         if (player.position.y < playerHeight / 2) {
+             player.position.y = playerHeight / 2;
+         }
+
+
+        // Update player bounding box *after* moving
         playerBox.setFromObject(player);
+
+        // --- Basic Camera Follow ---
+        const cameraOffset = new THREE.Vector3(0, 10, 15); // Relative offset from player
+        const targetPosition = player.position.clone().add(cameraOffset);
+        // Smooth camera movement (lerp)
+        camera.position.lerp(targetPosition, 0.1); // Adjust lerp factor for smoothness
+        camera.lookAt(player.position); // Always look at the player
+        // --- End Camera Follow ---
+
         // Optional: Visualize player bounding box for debugging
         // if (!scene.getObjectByName("playerHelper")) {
         //     const helper = new THREE.Box3Helper(playerBox, 0xffff00);
@@ -211,7 +265,7 @@ function animate() {
         //     scene.getObjectByName("playerHelper").box.copy(playerBox);
         // }
     }
-    // --- End Player Update ---
+    // --- End Player Movement Update ---
 
 
     // --- Portal Collision Check ---
@@ -222,7 +276,7 @@ function animate() {
         const distanceToEntry = playerCenter.distanceTo(entryPortalCenter);
 
         if (distanceToEntry < Config.PORTAL_COLLISION_THRESHOLD) {
-             console.log("Near entry portal...");
+             // console.log("Near entry portal..."); // Less spammy logs
             // More precise check: Check if player actually intersects the portal's volume
             if (playerBox.intersectsBox(entryPortalBox)) {
                 console.log("Entering entry portal! Redirecting back to:", entryPortalRefUrl);
@@ -251,7 +305,7 @@ function animate() {
         const distanceToExit = playerCenter.distanceTo(exitPortalCenter);
 
         if (distanceToExit < Config.PORTAL_COLLISION_THRESHOLD) {
-             console.log("Near exit portal...");
+             // console.log("Near exit portal..."); // Less spammy logs
             // Optional: Preload iframe (might be blocked by browsers sometimes)
             if (!document.getElementById('preloadFrame')) {
                 const nextPageUrl = `${Config.EXIT_PORTAL_URL}?${buildPortalQueryParams()}`;
